@@ -1,0 +1,86 @@
+# Transport Monitor Configuration
+# Sistema de monitoreo de transporte urbano - Configuración centralizada
+
+# Configuración de la cámara
+camera:
+  # Fuente de video: índice de cámara (0, 1, ...) o URL RTSP
+  source: 0
+  # Resolución objetivo
+  width: 1280
+  height: 720
+  # FPS objetivo para procesamiento (no afecta captura)
+  target_fps: 5
+
+# Configuración de detección de movimiento
+motion:
+  # Área mínima de contorno para considerar movimiento (en píxeles)
+  min_area: 5000
+  # Umbral de diferencia binaria (0-255)
+  threshold: 25
+  # Factor de desenfoque gaussiano (debe ser impar)
+  blur_kernel: 21
+  # Número de frames a saltar después de detectar movimiento
+  cooldown_frames: 5
+
+# Configuración del detector de rostros
+detector:
+  # Umbral mínimo de confianza para rostros (0-100)
+  face_confidence_threshold: 90
+  # Umbral de oclusión facial (0-100)
+  face_occluded_threshold: 80
+  # Umbral máximo de ángulo para considerar rostro frontal
+  frontal_threshold: 35
+  # Modo simulación (no llama a AWS, útil para desarrollo)
+  dry_run: false
+
+# Configuración de almacenamiento local (SQLite)
+storage:
+  # Ruta de la base de datos SQLite
+  database_path: "data/transport_events.db"
+  # Días para mantener eventos sincronizados antes de limpiar
+  retention_days: 30
+  # Tamaño máximo de la cola de eventos pendientes
+  max_pending_events: 10000
+
+# Configuración de AWS (credenciales)
+aws:
+  # Región de AWS Rekognition
+  region: "us-east-1"
+  # Las credenciales se manejan via variables de entorno o ~/.aws/credentials
+  # AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY
+  # Placeholder para desarrollo local sin AWS configurado
+  use_local_fallback: true
+
+# Configuración de rastreo de pasajeros (deduplicación)
+tracking:
+  # Habilitar rastreo de pasajeros para evitar conteos duplicados
+  enabled: true
+  # Tiempo en minutos antes de "olvidar" un pasajero (TTL)
+  # Después de este tiempo, si la misma persona vuelve a subir, se cuenta como nuevo
+  ttl_minutes: 180  # 3 horas
+  # Umbral de similitud para considerar que dos rostros son la misma persona (0-100)
+  similarity_threshold: 80.0
+  # Número máximo de rostros en cache
+  max_tracked_faces: 500
+  # Intervalo de limpieza de cache en segundos
+  cleanup_interval: 300  # 5 minutos
+
+# Configuración del sistema
+system:
+  # Tiempo de espera entre iteraciones del bucle principal (segundos)
+  loop_delay: 0.1
+  # Habilitar logging verbose
+  verbose: false
+  # Nivel de logging: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+  # Ruta del archivo de log
+  log_file: "logs/transport_monitor.log"
+
+# Configuración GPS (placeholder para futura integración)
+gps:
+  # Habilitar GPS
+  enabled: false
+  # Puerto serial del módulo GPS
+  port: "/dev/ttyUSB0"
+  # Baud rate
+  baud_rate: 9600

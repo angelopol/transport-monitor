@@ -1,0 +1,9 @@
+# Transport Monitor - Dependencias
+# Python >= 3.8
+
+# Paquete de conteo de rostros (instalar desde stream-faces-counter)
+# pip install -e ../stream-faces-counter
+stream-count-faces
+
+# Parsing de configuración YAML
+pyyaml>=6.0
