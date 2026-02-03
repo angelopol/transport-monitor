@@ -154,6 +154,7 @@ class TransportMonitor:
             "faces_detected_total": 0,
             "new_passengers": 0,
             "duplicate_passengers": 0,
+            "excluded_detected": 0,
             "events_saved": 0
         }
         
@@ -205,16 +206,19 @@ class TransportMonitor:
         # FaceTracker (deduplicación de pasajeros)
         self.tracking_enabled = tracking_config.get("enabled", True)
         if self.tracking_enabled:
+            excluded_paths = tracking_config.get("excluded_faces_paths", [])
             self.face_tracker = FaceTracker(
                 ttl_minutes=tracking_config.get("ttl_minutes", 180),
                 similarity_threshold=tracking_config.get("similarity_threshold", 80.0),
                 max_faces=tracking_config.get("max_tracked_faces", 500),
+                excluded_faces=excluded_paths if excluded_paths else None,
                 dry_run=detector_config.get("dry_run", False),
                 region=aws_config.get("region", "us-east-1")
             )
             self.logger.info(
                 f"Tracking habilitado: TTL={tracking_config.get('ttl_minutes', 180)} min, "
-                f"Similitud={tracking_config.get('similarity_threshold', 80.0)}%"
+                f"Similitud={tracking_config.get('similarity_threshold', 80.0)}%, "
+                f"Excluidos={len(excluded_paths)} rostros"
             )
         else:
             self.face_tracker = None
@@ -321,9 +325,14 @@ class TransportMonitor:
                             face_image = extract_face_image(frame, face.bounding_box)
                             
                             # Verificar si es nuevo pasajero
-                            is_new, face_id = self.face_tracker.is_new_passenger(face_image)
+                            # Retorna: (is_new, face_id, is_excluded)
+                            is_new, face_id, is_excluded = self.face_tracker.is_new_passenger(face_image)
                             
-                            if is_new:
+                            if is_excluded:
+                                # Personal autorizado (operador, conductor)
+                                self.stats["excluded_detected"] += 1
+                                self.logger.debug("Personal autorizado detectado, ignorando")
+                            elif is_new:
                                 new_passengers.append(face)
                                 self.stats["new_passengers"] += 1
                             else:

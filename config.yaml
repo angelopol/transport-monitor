@@ -64,6 +64,13 @@ tracking:
   max_tracked_faces: 500
   # Intervalo de limpieza de cache en segundos
   cleanup_interval: 300  # 5 minutos
+  # Rutas a fotos de personal autorizado que NO deben contarse como pasajeros
+  # Ejemplos: conductor, operador, inspector
+  # Estas personas serán ignoradas en el conteo
+  excluded_faces_paths: []
+  # excluded_faces_paths:
+  #   - "staff/conductor.jpg"
+  #   - "staff/operador.jpg"
 
 # Configuración del sistema
 system:

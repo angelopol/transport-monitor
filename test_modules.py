@@ -96,17 +96,18 @@ def test_face_tracker():
     fake_face_2 = b"fake_face_image_2"
     
     # Primer pasajero - deberia ser nuevo
-    is_new1, face_id1 = tracker.is_new_passenger(fake_face_1)
-    print(f"Pasajero 1: is_new={is_new1}, face_id={face_id1}")
+    is_new1, face_id1, is_excluded1 = tracker.is_new_passenger(fake_face_1)
+    print(f"Pasajero 1: is_new={is_new1}, face_id={face_id1}, is_excluded={is_excluded1}")
     assert is_new1 == True, "Primer pasajero deberia ser nuevo"
+    assert is_excluded1 == False, "No deberia ser excluido"
     
     # Segundo pasajero - deberia ser nuevo (dry_run siempre es nuevo)
-    is_new2, face_id2 = tracker.is_new_passenger(fake_face_2)
-    print(f"Pasajero 2: is_new={is_new2}, face_id={face_id2}")
+    is_new2, face_id2, is_excluded2 = tracker.is_new_passenger(fake_face_2)
+    print(f"Pasajero 2: is_new={is_new2}, face_id={face_id2}, is_excluded={is_excluded2}")
     assert is_new2 == True, "Segundo pasajero deberia ser nuevo en dry_run"
     
     stats = tracker.get_stats()
-    print(f"Stats: tracked={stats['tracked_faces']}, new={stats['new_passengers']}, dup_rate={stats['duplicate_rate']:.1f}%")
+    print(f"Stats: tracked={stats['tracked_faces']}, new={stats['new_passengers']}, excluded={stats['excluded_faces']}")
     assert stats['tracked_faces'] == 2, "Deberian haber 2 rostros rastreados"
     assert stats['new_passengers'] == 2, "Deberian haber 2 nuevos pasajeros"
     
