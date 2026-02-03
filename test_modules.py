@@ -160,6 +160,18 @@ def main():
         print(f"[FAIL] Transport Monitor Import: FAILED - {e}")
         all_passed = False
     
+    try:
+        all_passed &= test_geolocation()
+    except Exception as e:
+        print(f"[FAIL] Geolocation: FAILED - {e}")
+        all_passed = False
+    
+    try:
+        all_passed &= test_passenger_event_store()
+    except Exception as e:
+        print(f"[FAIL] PassengerEventStore: FAILED - {e}")
+        all_passed = False
+    
     print("\n" + "=" * 50)
     if all_passed:
         print("TODOS LOS TESTS PASARON [OK]")
@@ -167,6 +179,59 @@ def main():
     else:
         print("ALGUNOS TESTS FALLARON [FAIL]")
         return 1
+
+
+def test_geolocation():
+    print("\n=== Test LocationProvider ===")
+    from stream_count_faces import LocationProvider
+    
+    # Crear provider sin GPS (solo IP fallback)
+    provider = LocationProvider(use_ip_fallback=True)
+    
+    # Obtener ubicación
+    location = provider.get_location()
+    print(f"Ubicación obtenida: lat={location.latitude}, lng={location.longitude}, source={location.source}")
+    
+    # Verificar estadísticas
+    stats = provider.get_stats()
+    print(f"Stats: ip_fallback={stats['ip_fallback_enabled']}, cached={stats['cached_location'] is not None}")
+    
+    provider.close()
+    print("[OK] LocationProvider: PASSED")
+    return True
+
+
+def test_passenger_event_store():
+    print("\n=== Test PassengerEventStore ===")
+    from stream_count_faces import PassengerEventStore
+    
+    # Usar base de datos en memoria
+    store = PassengerEventStore(":memory:")
+    
+    # Registrar algunos abordajes
+    id1 = store.record_boarding(face_id="abc123", latitude=10.5, longitude=-66.9, location_source="gps")
+    id2 = store.record_boarding(face_id="def456", latitude=10.5, longitude=-66.9, location_source="gps")
+    id3 = store.record_boarding(face_id="ghi789", latitude=None, longitude=None, location_source="none")
+    
+    print(f"Eventos registrados: {id1}, {id2}, {id3}")
+    
+    # Verificar estadísticas
+    stats = store.get_stats()
+    print(f"Stats: total={stats['total_events']}, con_ubicacion={stats['events_with_location']}, sin_ubicacion={stats['events_without_location']}")
+    
+    assert stats['total_events'] == 3, "Deberian haber 3 eventos"
+    assert stats['events_with_location'] == 2, "Deberian haber 2 eventos con ubicación"
+    assert stats['events_without_location'] == 1, "Deberia haber 1 evento sin ubicación"
+    
+    # Verificar stats por ubicación
+    loc_stats = store.get_location_stats()
+    print(f"Ubicaciones: {len(loc_stats)} paradas unicas")
+    if loc_stats:
+        print(f"Parada 1: lat={loc_stats[0]['latitude']}, lng={loc_stats[0]['longitude']}, pasajeros={loc_stats[0]['passenger_count']}")
+    
+    print("[OK] PassengerEventStore: PASSED")
+    return True
+
 
 if __name__ == "__main__":
     sys.exit(main())

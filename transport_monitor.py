@@ -27,7 +27,10 @@ from typing import Optional
 
 import yaml
 
-from stream_count_faces import VideoStream, MotionDetector, LocalBuffer, FaceCounter, FaceTracker, extract_face_image
+from stream_count_faces import (
+    VideoStream, MotionDetector, LocalBuffer, FaceCounter, 
+    FaceTracker, extract_face_image, LocationProvider, PassengerEventStore
+)
 
 
 # Configuración de logging
@@ -174,6 +177,11 @@ class TransportMonitor:
         aws_config = self.config.get("aws", {})
         tracking_config = self.config.get("tracking", {})
         
+        # Geolocation configuration from environment
+        self.location_enabled = os.getenv("ENABLE_LOCATION_TRACKING", "true").lower() == "true"
+        self.ip_fallback_enabled = os.getenv("ENABLE_IP_FALLBACK", "true").lower() == "true"
+        gps_serial_port = os.getenv("GPS_SERIAL_PORT", None)
+        
         # VideoStream
         self.video_stream = VideoStream(
             source=cam_config.get("source", 0),
@@ -226,6 +234,24 @@ class TransportMonitor:
         else:
             self.face_tracker = None
             self.logger.info("Tracking de pasajeros deshabilitado")
+        
+        # LocationProvider y PassengerEventStore (geolocalización)
+        if self.location_enabled:
+            self.location_provider = LocationProvider(
+                serial_port=gps_serial_port,
+                use_ip_fallback=self.ip_fallback_enabled
+            )
+            self.passenger_store = PassengerEventStore(
+                db_path=storage_config.get("passenger_events_path", "data/passenger_events.db")
+            )
+            self.logger.info(
+                f"Geolocalización habilitada: GPS={gps_serial_port or 'auto'}, "
+                f"IP fallback={'sí' if self.ip_fallback_enabled else 'no'}"
+            )
+        else:
+            self.location_provider = None
+            self.passenger_store = None
+            self.logger.info("Geolocalización deshabilitada")
         
         self.logger.info("Componentes inicializados correctamente")
     
@@ -357,7 +383,28 @@ class TransportMonitor:
                 
                 self.logger.info(f"Nuevos pasajeros: {len(new_passengers)} (de {face_count} rostros)")
                 
-                # 5. Guardar evento solo para nuevos pasajeros
+                # 5. Registrar eventos de abordaje con geolocalización
+                if self.location_enabled and hasattr(self, 'passenger_store'):
+                    location = self.location_provider.get_location()
+                    for face in new_passengers:
+                        # Get face_id if available from tracking
+                        passenger_face_id = None
+                        if self.tracking_enabled and self.face_tracker:
+                            try:
+                                face_img = extract_face_image(frame, face.bounding_box)
+                                _, passenger_face_id, _ = self.face_tracker.is_new_passenger(face_img)
+                            except:
+                                pass
+                        
+                        self.passenger_store.record_boarding(
+                            face_id=passenger_face_id,
+                            latitude=location.latitude,
+                            longitude=location.longitude,
+                            location_source=location.source,
+                            location_accuracy=location.accuracy
+                        )
+                
+                # 6. Guardar evento solo para nuevos pasajeros
                 event_data = self._create_face_event(len(new_passengers))
                 event_id = self.local_buffer.save_event("face_count", event_data)
                 self.stats["events_saved"] += 1
