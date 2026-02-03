@@ -207,18 +207,21 @@ class TransportMonitor:
         self.tracking_enabled = tracking_config.get("enabled", True)
         if self.tracking_enabled:
             excluded_paths = tracking_config.get("excluded_faces_paths", [])
+            offline_cache = tracking_config.get("offline_cache_path", None)
             self.face_tracker = FaceTracker(
                 ttl_minutes=tracking_config.get("ttl_minutes", 180),
                 similarity_threshold=tracking_config.get("similarity_threshold", 80.0),
                 max_faces=tracking_config.get("max_tracked_faces", 500),
                 excluded_faces=excluded_paths if excluded_paths else None,
+                offline_cache_path=offline_cache,
                 dry_run=detector_config.get("dry_run", False),
                 region=aws_config.get("region", "us-east-1")
             )
             self.logger.info(
                 f"Tracking habilitado: TTL={tracking_config.get('ttl_minutes', 180)} min, "
                 f"Similitud={tracking_config.get('similarity_threshold', 80.0)}%, "
-                f"Excluidos={len(excluded_paths)} rostros"
+                f"Excluidos={len(excluded_paths)} rostros, "
+                f"Offline cache={'sí' if offline_cache else 'no'}"
             )
         else:
             self.face_tracker = None

@@ -71,6 +71,9 @@ tracking:
   # excluded_faces_paths:
   #   - "staff/conductor.jpg"
   #   - "staff/operador.jpg"
+  # Cache offline para guardar rostros cuando no hay internet
+  # Los rostros se almacenan y procesan cuando la conexión se restablece
+  offline_cache_path: "data/face_cache.db"
 
 # Configuración del sistema
 system:
