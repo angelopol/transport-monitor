@@ -172,6 +172,12 @@ def main():
         print(f"[FAIL] PassengerEventStore: FAILED - {e}")
         all_passed = False
     
+    try:
+        all_passed &= test_cloud_sync()
+    except Exception as e:
+        print(f"[FAIL] CloudSync: FAILED - {e}")
+        all_passed = False
+    
     print("\n" + "=" * 50)
     if all_passed:
         print("TODOS LOS TESTS PASARON [OK]")
@@ -230,6 +236,32 @@ def test_passenger_event_store():
         print(f"Parada 1: lat={loc_stats[0]['latitude']}, lng={loc_stats[0]['longitude']}, pasajeros={loc_stats[0]['passenger_count']}")
     
     print("[OK] PassengerEventStore: PASSED")
+    return True
+
+
+def test_cloud_sync():
+    print("\n=== Test CloudSync ===")
+    from stream_count_faces import CloudSync, get_device_mac
+    
+    # Verificar MAC del dispositivo
+    mac = get_device_mac()
+    print(f"Device MAC: {mac}")
+    assert ":" in mac, "MAC debería tener formato xx:xx:xx:xx:xx:xx"
+    
+    # Crear cliente de sync (sin servidor real)
+    sync = CloudSync(
+        api_url="http://localhost:8000/api/v1",
+        api_token="test_token_12345"
+    )
+    
+    # Verificar stats
+    stats = sync.get_stats()
+    print(f"Stats: mac={stats['device_mac']}, synced={stats['total_synced']}")
+    
+    assert stats['device_mac'] == mac, "MAC debe coincidir"
+    assert stats['total_synced'] == 0, "Sin sincronizaciones aún"
+    
+    print("[OK] CloudSync: PASSED")
     return True
 
 
