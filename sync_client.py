@@ -1,0 +1,77 @@
+import requests
+import logging
+import json
+import time
+from typing import List, Dict, Optional
+
+class CloudSync:
+    """
+    Client for synchronizing telemetry events with the Transport Admin API.
+    Handles authentication, batching, and error recovery.
+    """
+    
+    def __init__(self, api_url: str, api_token: str, device_mac: str):
+        """
+        Initialize the sync client.
+        
+        Args:
+            api_url: Base URL of the API (e.g., http://localhost:8000/api/v1)
+            api_token: Bearer token for authentication
+            device_mac: MAC address of the device (used for logging/identification)
+        """
+        self.api_url = api_url.rstrip('/')
+        self.api_token = api_token
+        self.device_mac = device_mac
+        self.logger = logging.getLogger(__name__)
+        self.headers = {
+            'Authorization': f'Bearer {self.api_token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Device-MAC': self.device_mac
+        }
+
+    def check_connection(self) -> bool:
+        """Check if the API is reachable."""
+        try:
+            response = requests.get(f"{self.api_url}/status", timeout=5)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+
+    def sync_events(self, events: List[Dict]) -> int:
+        """
+        Sync a batch of events to the cloud.
+        
+        Args:
+            events: List of event dictionaries
+            
+        Returns:
+            Number of successfully synced events. Returns 0 on failure.
+        """
+        if not events:
+            return 0
+            
+        payload = {
+            "events": events
+        }
+        
+        try:
+            response = requests.post(
+                f"{self.api_url}/sync",
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                synced_count = result.get('synced_count', len(events))
+                self.logger.info(f"Successfully synced {synced_count} events")
+                return synced_count
+            else:
+                self.logger.error(f"Sync failed with status {response.status_code}: {response.text}")
+                return 0
+                
+        except requests.RequestException as e:
+            self.logger.error(f"Network error during sync: {e}")
+            return 0

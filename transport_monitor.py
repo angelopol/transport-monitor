@@ -27,13 +27,9 @@ from typing import Optional
 
 import yaml
 
-from stream_count_faces import (
-    VideoStream, MotionDetector, LocalBuffer, FaceCounter, 
-    FaceTracker, extract_face_image, LocationProvider, PassengerEventStore
-)
 
+from sync_client import CloudSync
 
-# Configuración de logging
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     """
     Configura el sistema de logging.
@@ -252,6 +248,23 @@ class TransportMonitor:
             self.location_provider = None
             self.passenger_store = None
             self.logger.info("Geolocalización deshabilitada")
+            
+        # Cloud Sync initialization
+        sync_config = self.config.get("sync", {})
+        if sync_config.get("enabled", False):
+            self.cloud_sync = CloudSync(
+                api_url=sync_config.get("api_url", "http://localhost:8000/api/v1"),
+                api_token=sync_config.get("api_token", ""),
+                device_mac=self.config.get("device", {}).get("mac", "unknown")
+            )
+            self.sync_interval = sync_config.get("interval", 60)
+            self.stop_sync = threading.Event()
+            self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
+            self.sync_thread.start()
+            self.logger.info(f"Cloud Sync habilitado. Intervalo: {self.sync_interval}s")
+        else:
+            self.cloud_sync = None
+            self.logger.info("Cloud Sync deshabilitado")
         
         self.logger.info("Componentes inicializados correctamente")
     
@@ -441,9 +454,61 @@ class TransportMonitor:
             f"pending={buffer_stats['pending_events']}{tracking_info}"
         )
     
+    def _sync_loop(self):
+        """Background loop for syncing events."""
+        while not self.stop_sync.is_set():
+            try:
+                # 1. Get pending events from local buffer
+                if hasattr(self.local_buffer, 'get_pending_events'):
+                    pending_events = self.local_buffer.get_pending_events(limit=50)
+                else:
+                    # Fallback if method doesn't exist yet in LocalBuffer
+                    pending_events = []
+                
+                if pending_events:
+                    self.logger.debug(f"Intentando sincronizar {len(pending_events)} eventos...")
+                    
+                    # Convert to API format
+                    api_events = []
+                    for evt in pending_events:
+                        # Assuming evt is (id, event_type, data_json, created_at, synced)
+                        try:
+                            # data_json comes from db, might require parsing if it's string
+                            data = json.loads(evt['data']) if isinstance(evt['data'], str) else evt['data']
+                            api_events.append({
+                                'timestamp': data.get('timestamp'),
+                                'count': data.get('count', 0),
+                                'location': data.get('location'),
+                                'type': 'boarding' 
+                            })
+                        except Exception as e:
+                            self.logger.error(f"Error parsing event {evt['id']}: {e}")
+
+                    # 2. Sync
+                    if api_events and self.cloud_sync:
+                         synced_count = self.cloud_sync.sync_events(api_events)
+                    
+                         if synced_count > 0:
+                            # 3. Mark as synced in local db
+                            event_ids = [evt['id'] for evt in pending_events[:synced_count]]
+                            if hasattr(self.local_buffer, 'mark_synced'):
+                                self.local_buffer.mark_synced(event_ids)
+            
+            except Exception as e:
+                self.logger.error(f"Error en bucle de sincronización: {e}")
+            
+            # Wait for next interval
+            self.stop_sync.wait(self.sync_interval)
+
     def _shutdown(self) -> None:
         """Realiza el apagado limpio del sistema."""
         self.logger.info("Iniciando apagado del sistema...")
+        
+        # Stop sync thread
+        if hasattr(self, 'stop_sync'):
+             self.stop_sync.set()
+             if hasattr(self, 'sync_thread') and self.sync_thread.is_alive():
+                 self.sync_thread.join(timeout=2)
         
         # Detener stream de video
         self.video_stream.stop()
