@@ -121,7 +121,9 @@ def get_default_config() -> dict:
             "face_confidence_threshold": 90,
             "face_occluded_threshold": 80,
             "frontal_threshold": 35,
-            "dry_run": False
+            "dry_run": False,
+            "min_face_size": 50,
+            "blur_threshold": 80.0
         },
         "storage": {
             "database_path": "data/transport_events.db",
@@ -484,7 +486,24 @@ class TransportMonitor:
                 # 4. Filtrar pasajeros duplicados (si tracking está habilitado)
                 new_passengers = []
                 if self.tracking_enabled and self.face_tracker:
+                    frame_height, frame_width = frame.shape[:2]
+                    min_face_size = self.config["detector"].get("min_face_size", 50)
+                    blur_threshold = self.config["detector"].get("blur_threshold", 80.0)
+
                     for face in faces:
+                        # 1. Check face size
+                        face_w = face.bounding_box['Width'] * frame_width
+                        face_h = face.bounding_box['Height'] * frame_height
+                        if face_w < min_face_size or face_h < min_face_size:
+                            self.logger.debug(f"Face too small ({int(face_w)}x{int(face_h)} < {min_face_size}), skipping")
+                            continue
+
+                        # 2. Check sharpness (blur)
+                        sharpness = face.quality.get('sharpness', 0)
+                        if sharpness < blur_threshold:
+                            self.logger.debug(f"Face too blurry (sharpness {sharpness:.1f} < {blur_threshold}), skipping")
+                            continue
+
                         try:
                             # Extraer imagen del rostro
                             face_image = extract_face_image(frame, face.bounding_box)
@@ -500,6 +519,19 @@ class TransportMonitor:
                             elif is_new:
                                 new_passengers.append(face)
                                 self.stats["new_passengers"] += 1
+                                
+                                # DEBUG: Save face image for inspection
+                                if self.logger.isEnabledFor(logging.DEBUG):
+                                    try:
+                                        debug_dir = Path("data/debug_faces")
+                                        debug_dir.mkdir(parents=True, exist_ok=True)
+                                        ts = datetime.now().strftime('%H%M%S_%f')
+                                        filename = debug_dir / f"face_{ts}_{face_id}.jpg"
+                                        with open(filename, "wb") as f:
+                                            f.write(face_image)
+                                        self.logger.debug(f"Saved debug face: {filename}")
+                                    except Exception as e:
+                                        self.logger.warning(f"Failed to save debug face: {e}")
                             else:
                                 self.stats["duplicate_passengers"] += 1
                                 self.logger.debug(f"Pasajero duplicado detectado: {face_id}")
@@ -511,6 +543,20 @@ class TransportMonitor:
                     # Sin tracking, todos los rostros son nuevos pasajeros
                     new_passengers = faces
                     self.stats["new_passengers"] += len(faces)
+                    
+                    # DEBUG: Save all faces when tracking is disabled
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        for i, face in enumerate(faces):
+                            try:
+                                face_image = extract_face_image(frame, face.bounding_box)
+                                debug_dir = Path("data/debug_faces")
+                                debug_dir.mkdir(parents=True, exist_ok=True)
+                                ts = datetime.now().strftime('%H%M%S_%f')
+                                filename = debug_dir / f"face_{ts}_no_track_{i}.jpg"
+                                with open(filename, "wb") as f:
+                                    f.write(face_image)
+                            except Exception as e:
+                                self.logger.warning(f"Failed to save debug face: {e}")
                 
                 if len(new_passengers) == 0:
                     self.logger.debug("Sin nuevos pasajeros en este frame")

@@ -32,6 +32,10 @@ detector:
   frontal_threshold: 35
   # Modo simulación (no llama a AWS, útil para desarrollo)
   dry_run: false
+  # Tamaño mínimo del rostro (ancho en píxeles) para ser considerado válido
+  min_face_size: 50
+  # Umbral de varianza Laplaciana para detectar desenfoque (mayor es más estricto, 0 deshabilita)
+  blur_threshold: 100.0
 
 # Configuración de almacenamiento local (SQLite)
 storage:
@@ -73,7 +77,7 @@ tracking:
   #   - "staff/operador.jpg"
   # Cache offline para guardar rostros cuando no hay internet
   # Los rostros se almacenan y procesan cuando la conexión se restablece
-  offline_cache_path: "data/face_cache.db"
+  offline_cache_path: "data/transport_events.db"
 
 # Configuración del sistema
 system:
