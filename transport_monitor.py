@@ -20,15 +20,28 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import yaml
+from dotenv import load_dotenv
 
 
 from sync_client import CloudSync
+from stream_count_faces import (
+    VideoStream,
+    MotionDetector,
+    FaceCounter,
+    FaceTracker,
+    LocalBuffer,
+    LocationProvider,
+    PassengerEventStore,
+    extract_face_image,
+    get_device_mac
+)
 
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     """
@@ -179,21 +192,26 @@ class TransportMonitor:
         gps_serial_port = os.getenv("GPS_SERIAL_PORT", None)
         
         # VideoStream
+        print(f"[3/8] Inicializando VideoStream (source={cam_config.get('source', 0)})...")
         self.video_stream = VideoStream(
             source=cam_config.get("source", 0),
             width=cam_config.get("width", 1280),
             height=cam_config.get("height", 720)
         )
+        print("[3/8] VideoStream OK")
         
         # MotionDetector
+        print("[4/8] Inicializando MotionDetector...")
         self.motion_detector = MotionDetector(
             min_area=motion_config.get("min_area", 5000),
             threshold=motion_config.get("threshold", 25),
             blur_kernel=motion_config.get("blur_kernel", 21),
             cooldown_frames=motion_config.get("cooldown_frames", 5)
         )
+        print("[4/8] MotionDetector OK")
         
         # FaceCounter
+        print(f"[5/8] Inicializando FaceCounter (dry_run={detector_config.get('dry_run', False)})...")
         self.face_counter = FaceCounter(
             face_confidence_threshold=detector_config.get("face_confidence_threshold", 90),
             face_occluded_threshold=detector_config.get("face_occluded_threshold", 80),
@@ -201,13 +219,17 @@ class TransportMonitor:
             dry_run=detector_config.get("dry_run", False),
             region=aws_config.get("region", "us-east-1")
         )
+        print("[5/8] FaceCounter OK")
         
         # LocalBuffer
+        print("[6/8] Inicializando LocalBuffer...")
         self.local_buffer = LocalBuffer(
             db_path=storage_config.get("database_path", "data/transport_events.db")
         )
+        print("[6/8] LocalBuffer OK")
         
         # FaceTracker (deduplicación de pasajeros)
+        print("[7/8] Inicializando FaceTracker...")
         self.tracking_enabled = tracking_config.get("enabled", True)
         if self.tracking_enabled:
             excluded_paths = tracking_config.get("excluded_faces_paths", [])
@@ -230,6 +252,7 @@ class TransportMonitor:
         else:
             self.face_tracker = None
             self.logger.info("Tracking de pasajeros deshabilitado")
+        print("[7/8] FaceTracker OK")
         
         # LocationProvider y PassengerEventStore (geolocalización)
         if self.location_enabled:
@@ -250,13 +273,72 @@ class TransportMonitor:
             self.logger.info("Geolocalización deshabilitada")
             
         # Cloud Sync initialization
+        print(f"[7.5/8] Inicializando Cloud Sync (SYNC_ENABLED={os.getenv('SYNC_ENABLED')})...")
         sync_config = self.config.get("sync", {})
+        
+        # Override with environment variables
+        if os.getenv("SYNC_ENABLED", "").lower() == "true":
+            sync_config["enabled"] = True
+        if os.getenv("SYNC_API_URL"):
+            sync_config["api_url"] = os.getenv("SYNC_API_URL")
+        if os.getenv("SYNC_API_TOKEN"):
+            sync_config["api_token"] = os.getenv("SYNC_API_TOKEN")
+            
+        # Device MAC: Try to get from hardware first, fallback to env/config
+        try:
+            device_mac = get_device_mac()
+            if not device_mac or "unknown" in device_mac.lower():
+                raise ValueError("Invalid hardware MAC")
+        except Exception as e:
+            self.logger.warning(f"Could not get hardware MAC: {e}. Using fallback.")
+            device_mac = os.getenv("DEVICE_MAC", self.config.get("device", {}).get("mac", "unknown"))
+        print(f"[7.5/8] Device MAC: {device_mac}")
+
         if sync_config.get("enabled", False):
             self.cloud_sync = CloudSync(
                 api_url=sync_config.get("api_url", "http://localhost:8000/api/v1"),
-                api_token=sync_config.get("api_token", ""),
-                device_mac=self.config.get("device", {}).get("mac", "unknown")
+                api_token="",  # Always start with empty token, let auth flow set it
+                device_mac=device_mac
             )
+            
+            # Always authenticate via device/auth endpoint
+            self.logger.info(f"Intentando autenticación para MAC: {device_mac}")
+            print(f"[7.6/8] Autenticando dispositivo {device_mac}...", flush=True)
+            retry_interval = 30  # seconds
+            
+            while True:
+                auth_result = self.cloud_sync.authenticate_device()
+                status = auth_result.get('status', 'error')
+                token = auth_result.get('token')
+                
+                if token:
+                    print(f"[7.7/8] Token del dispositivo obtenido.", flush=True)
+                
+                if status == 'authenticated':
+                    self.logger.info(f"Dispositivo autenticado y vinculado a bus")
+                    device_info = auth_result.get('device', {})
+                    print(f"✅ Dispositivo autenticado. Vinculado a bus: {device_info.get('plate', '?')}", flush=True)
+                    break
+                
+                elif status in ('registered', 'pending'):
+                    print(f"⏳ {auth_result.get('message')}", flush=True)
+                    print(f"   Esperando vinculación con un autobús... (reintento en {retry_interval}s)", flush=True)
+                    self.logger.info(f"Device {status}: waiting for bus link. Retry in {retry_interval}s")
+                    time.sleep(retry_interval)
+                    continue
+                
+                elif status == 'inactive':
+                    print(f"❌ Dispositivo inactivo: {auth_result.get('message')}", flush=True)
+                    self.logger.error("Device is inactive. Cannot proceed.")
+                    raise SystemExit(1)
+                
+                else:  # error
+                    self.logger.warning(f"Auth error: {auth_result.get('message')}. Retry in {retry_interval}s")
+                    print(f"⚠️  Error: {auth_result.get('message')}", flush=True)
+                    print(f"   Reintentando en {retry_interval} segundos...", flush=True)
+                    time.sleep(retry_interval)
+                    continue
+            
             self.sync_interval = sync_config.get("interval", 60)
             self.stop_sync = threading.Event()
             self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
@@ -611,7 +693,12 @@ def main() -> int:
     Returns:
         Código de salida (0 = éxito)
     """
+    # Cargar variables de entorno desde .env
+    load_dotenv()
+    
     args = parse_arguments()
+    print("[1/8] Iniciando script transport_monitor.py...")
+    print(f"[1/8] ENABLE_DEBUG_LOGS = {os.getenv('ENABLE_DEBUG_LOGS')}")
     
     # Cargar configuración
     config = get_default_config()
@@ -642,6 +729,12 @@ def main() -> int:
     if args.log_file:
         config["system"]["log_file"] = args.log_file
     
+    # Configuración de logging desde .env
+    if os.getenv("ENABLE_DEBUG_LOGS", "").lower() == "true":
+        config["system"]["log_level"] = "DEBUG"
+        config["system"]["verbose"] = True
+        print("DEBUG MODE ENABLED via .env")
+
     # Configurar logging
     setup_logging(
         level=config["system"].get("log_level", "INFO"),
@@ -653,8 +746,10 @@ def main() -> int:
     logger.info(f"Dry-run: {config['detector'].get('dry_run', False)}")
     
     # Crear e iniciar monitor
+    print("[2/8] Configuración cargada. Creando TransportMonitor...")
     try:
         monitor = TransportMonitor(config)
+        print("[8/8] TransportMonitor creado. Iniciando bucle principal...")
         monitor.run()
         return 0
     except KeyboardInterrupt:

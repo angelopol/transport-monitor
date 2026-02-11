@@ -34,9 +34,71 @@ class CloudSync:
         """Check if the API is reachable."""
         try:
             response = requests.get(f"{self.api_url}/status", timeout=5)
-            return response.status_code == 200
+            # Accept 200 or 401 (unauthorized but reachable) as "connected" for status check
+            return response.status_code in [200, 401]
         except requests.RequestException:
             return False
+
+    def authenticate_device(self) -> dict:
+        """
+        Authenticate with the backend using the device MAC address.
+        The endpoint always returns the device token on success.
+        
+        Returns:
+            dict with keys:
+                - status: 'authenticated', 'pending', 'registered', 'inactive', 'error'
+                - message: Human-readable message
+                - token: API token (always present on success)
+                - device: Device info dict (if available)
+        """
+        auth_url = f"{self.api_url}/device/auth"
+        
+        try:
+            self.logger.info(f"Authenticating device with MAC: {self.device_mac}")
+            response = requests.post(
+                auth_url,
+                json={'mac_address': self.device_mac},
+                headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+                timeout=10
+            )
+            
+            data = response.json()
+            status = data.get('status', 'error')
+            token = data.get('token')
+            
+            # Always capture token if present
+            if token:
+                self.api_token = token
+                self.headers['Authorization'] = f'Bearer {self.api_token}'
+            
+            if response.status_code == 200 and data.get('success'):
+                self.logger.info(f"Device auth response: {status}")
+                return {
+                    'status': status,
+                    'message': data.get('message', ''),
+                    'token': token,
+                    'device': data.get('device', {})
+                }
+            
+            if response.status_code == 403:
+                self.logger.warning(f"Device inactive: {data.get('message')}")
+                return {
+                    'status': 'inactive',
+                    'message': data.get('message', 'Dispositivo inactivo')
+                }
+            
+            self.logger.error(f"Auth failed: {response.status_code} - {response.text}")
+            return {
+                'status': 'error',
+                'message': f"Error {response.status_code}: {data.get('message', 'Unknown error')}"
+            }
+            
+        except requests.RequestException as e:
+            self.logger.error(f"Network error during authentication: {e}")
+            return {
+                'status': 'error',
+                'message': f"Error de red: {e}"
+            }
 
     def sync_events(self, events: List[Dict]) -> int:
         """
