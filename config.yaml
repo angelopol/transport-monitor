@@ -14,9 +14,9 @@ camera:
 # Configuración de detección de movimiento
 motion:
   # Área mínima de contorno para considerar movimiento (en píxeles)
-  min_area: 5000
+  min_area: 15000
   # Umbral de diferencia binaria (0-255)
-  threshold: 25
+  threshold: 50
   # Factor de desenfoque gaussiano (debe ser impar)
   blur_kernel: 21
   # Número de frames a saltar después de detectar movimiento

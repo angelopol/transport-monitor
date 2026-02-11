@@ -137,3 +137,82 @@ class CloudSync:
         except requests.RequestException as e:
             self.logger.error(f"Network error during sync: {e}")
             return 0
+
+    def send_heartbeat(self) -> bool:
+        """
+        Send a heartbeat payload to the API to update device status.
+        
+        Returns:
+            True if heartbeat was successful
+        """
+        try:
+            payload = {"events": []}
+            response = requests.post(
+                f"{self.api_url}/sync",
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                self.logger.debug("Heartbeat sent successfully")
+                return True
+            else:
+                self.logger.warning(f"Heartbeat failed: {response.status_code}")
+                return False
+                
+        except requests.RequestException as e:
+            self.logger.error(f"Network error during heartbeat: {e}")
+            return False
+
+    def get_excluded_faces(self) -> List[Dict]:
+        """
+        Obtiene lista de conductores con foto para excluir del conteo.
+        """
+        try:
+            self.logger.info("Sincronizando rostros excluidos...")
+            response = requests.get(
+                f"{self.api_url}/drivers/excluded",
+                headers=self.headers,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    drivers = data.get("drivers", [])
+                    self.logger.info(f"Se obtuvieron {len(drivers)} conductores para exclusión")
+                    return drivers
+            
+            self.logger.warning(f"Error obteniendo rostros excluidos: {response.status_code} - {response.text}")
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Excepción obteniendo rostros excluidos: {e}")
+            return []
+
+    def get_excluded_collectors(self) -> List[Dict]:
+        """
+        Obtiene lista de colectores con foto para excluir del conteo.
+        """
+        try:
+            self.logger.info("Sincronizando colectores excluidos...")
+            response = requests.get(
+                f"{self.api_url}/collectors/excluded",
+                headers=self.headers,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    collectors = data.get("collectors", [])
+                    self.logger.info(f"Se obtuvieron {len(collectors)} colectores para exclusión")
+                    return collectors
+            
+            self.logger.warning(f"Error obteniendo colectores excluidos: {response.status_code} - {response.text}")
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Excepción obteniendo colectores excluidos: {e}")
+            return []

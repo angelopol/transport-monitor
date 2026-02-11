@@ -18,6 +18,9 @@ Uso:
 import argparse
 import logging
 import os
+import cv2
+import requests
+
 import signal
 import sys
 import threading
@@ -60,6 +63,9 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
+    
+    # Force clear existing handlers to ensure our config applies
+    logging.root.handlers = []
     
     logging.basicConfig(
         level=getattr(logging, level.upper()),
@@ -106,8 +112,8 @@ def get_default_config() -> dict:
             "target_fps": 5
         },
         "motion": {
-            "min_area": 5000,
-            "threshold": 25,
+            "min_area": 15000,
+            "threshold": 50,
             "blur_kernel": 21,
             "cooldown_frames": 5
         },
@@ -367,7 +373,7 @@ class TransportMonitor:
         """
         return {
             "count": face_count,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.utcnow().isoformat() + "Z",
             "device_id": "transport_monitor_001",  # TODO: Hacer configurable
             "location": {
                 "lat": None,  # TODO: Integrar GPS
@@ -407,7 +413,13 @@ class TransportMonitor:
             return
         
         self.logger.info("Stream de video activo, iniciando bucle principal...")
+        self.logger.info("Entrando al bucle while...")
         
+        # Initialize debug window if needed
+        if self.logger.isEnabledFor(logging.DEBUG):
+            cv2.namedWindow("Transport Monitor Debug", cv2.WINDOW_NORMAL)
+            self.logger.debug("Visual Debug Window Initialized")
+
         try:
             while self.running:
                 # 1. Leer frame
@@ -419,19 +431,48 @@ class TransportMonitor:
                 
                 self.stats["frames_processed"] += 1
                 
+
+
+                # Heartbeat log every 300 frames (approx 10-30s depending on fps)
+                if self.stats["frames_processed"] % 300 == 0:
+                    fc_stats = self.face_counter.get_stats()
+                    last_err = fc_stats.get("last_error")
+                    err_msg = f" | Last Error: {last_err}" if last_err else ""
+                    self.logger.info(f"[HEARTBEAT] Frames: {self.stats['frames_processed']} | Motion: {self.stats['motion_detected_count']} | Faces: {self.stats['faces_detected_total']}{err_msg}")
+                
                 # 2. Verificar movimiento
                 motion_detected = self.motion_detector.detect(frame)
                 
+                faces = []
+                face_count = 0
+
+                if motion_detected:
+                    self.stats["motion_detected_count"] += 1
+                    self.logger.debug("Movimiento detectado, analizando rostros...")
+                    
+                    # 3. Detectar rostros
+                    faces = self.face_counter.count_faces(frame)
+                    face_count = len(faces)
+
+                # Visual Debug
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    debug_frame = frame.copy()
+                    
+                    if face_count > 0:
+                        debug_frame = self.face_counter.draw_faces(debug_frame, faces)
+                    
+                    color = (0, 255, 0) if motion_detected else (0, 0, 255)
+                    cv2.putText(debug_frame, f"Motion: {motion_detected}", (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                    
+                    cv2.imshow("Transport Monitor Debug", debug_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        self.running = False
+                        break
+
                 if not motion_detected:
                     time.sleep(loop_delay)
                     continue
-                
-                self.stats["motion_detected_count"] += 1
-                self.logger.debug("Movimiento detectado, analizando rostros...")
-                
-                # 3. Detectar rostros
-                faces = self.face_counter.count_faces(frame)
-                face_count = len(faces)
                 
                 if face_count == 0:
                     time.sleep(loop_delay)
@@ -509,9 +550,9 @@ class TransportMonitor:
                 # 5. Dormir para controlar CPU
                 time.sleep(loop_delay)
                 
-                # Log periódico de estadísticas
+                # Log confirmation periodically
                 if self.stats["frames_processed"] % 100 == 0:
-                    self._log_stats()
+                    self.logger.debug(f"Updating visual window... (Motion: {motion_detected})")
                     
         except Exception as e:
             self.logger.error(f"Error en bucle principal: {e}", exc_info=True)
@@ -536,8 +577,89 @@ class TransportMonitor:
             f"pending={buffer_stats['pending_events']}{tracking_info}"
         )
     
+    def _sync_excluded_faces(self) -> None:
+        """
+        Sincroniza y descarga las fotos de personal para exclusión (conductores y colectores).
+        """
+        if not self.cloud_sync or not self.face_tracker:
+            return
+
+        try:
+            self.logger.info("Iniciando sincronización de rostros excluidos...")
+            
+            # 1. Obtener conductores
+            drivers = self.cloud_sync.get_excluded_faces()
+            # 2. Obtener colectores
+            collectors = self.cloud_sync.get_excluded_collectors()
+            
+            all_excluded = []
+            for d in drivers:
+                d['type'] = 'driver'
+                all_excluded.append(d)
+            for c in collectors:
+                c['type'] = 'collector'
+                all_excluded.append(c)
+            
+            if not all_excluded:
+                self.logger.info("No hay personal para excluir.")
+                return
+
+            # Directorio para guardar fotos
+            excluded_dir = Path("data/excluded_faces")
+            excluded_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Limpiar collage actual
+            self.logger.info("Limpiando rostros excluidos anteriores...")
+            self.face_tracker.clear_excluded()
+            
+            count = 0
+            for person in all_excluded:
+                try:
+                    photo_url = person.get("photo_url")
+                    person_id = person.get("id")
+                    person_type = person.get("type", "unknown")
+                    
+                    if not photo_url:
+                        continue
+                        
+                    # Determinar extension
+                    path_tokens = os.path.splitext(photo_url)
+                    ext = path_tokens[1] if len(path_tokens) > 1 else ".jpg"
+                    if not ext: ext = ".jpg"
+                    
+                    # Prefix 'driver_' or 'collector_'
+                    local_path = excluded_dir / f"{person_type}_{person_id}{ext}"
+                    local_path_str = str(local_path)
+                    
+                    # Descargar foto
+                    self.logger.debug(f"Descargando foto ({person_type} {person_id}): {photo_url}")
+                    response = requests.get(photo_url, timeout=10)
+                    
+                    if response.status_code == 200:
+                        with open(local_path, "wb") as f:
+                            f.write(response.content)
+                        
+                        # Agregar al tracker
+                        if self.face_tracker.add_excluded_face(local_path_str):
+                            count += 1
+                    else:
+                        self.logger.warning(f"Error descargando foto {photo_url}: {response.status_code}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error procesando persona {person.get('id')}: {e}")
+            
+            self.logger.info(f"Sincronización de excluidos completada: {count} rostros cargados.")
+            
+        except Exception as e:
+            self.logger.error(f"Error general en _sync_excluded_faces: {e}")
+
     def _sync_loop(self):
         """Background loop for syncing events."""
+        # Initial sync of excluded faces
+        if self.tracking_enabled:
+             self._sync_excluded_faces()
+             self._last_excluded_sync = time.time()
+
         while not self.stop_sync.is_set():
             try:
                 # 1. Get pending events from local buffer
@@ -575,9 +697,33 @@ class TransportMonitor:
                             event_ids = [evt['id'] for evt in pending_events[:synced_count]]
                             if hasattr(self.local_buffer, 'mark_synced'):
                                 self.local_buffer.mark_synced(event_ids)
+                else:
+                    if self.cloud_sync:
+                        self.logger.debug("No hay eventos pendientes, enviando heartbeat...")
+                        self.cloud_sync.send_heartbeat()
             
             except Exception as e:
                 self.logger.error(f"Error en bucle de sincronización: {e}")
+            
+            # Save tracking state periodically (every 5 mins) to prevent data loss on power failure
+            if self.tracking_enabled and self.face_tracker:
+                current_time = time.time()
+                
+                # Persistence check
+                if not hasattr(self, '_last_tracking_save'):
+                    self._last_tracking_save = current_time
+                
+                if current_time - self._last_tracking_save > 300:  # 5 minutes
+                    self.face_tracker.save_state()
+                    self._last_tracking_save = current_time
+                
+                # Excluded faces sync check (every 15 mins)
+                if not hasattr(self, '_last_excluded_sync'):
+                    self._last_excluded_sync = 0
+                
+                if current_time - self._last_excluded_sync > 900: # 15 minutes
+                     self._sync_excluded_faces()
+                     self._last_excluded_sync = current_time
             
             # Wait for next interval
             self.stop_sync.wait(self.sync_interval)
@@ -594,6 +740,11 @@ class TransportMonitor:
         
         # Detener stream de video
         self.video_stream.stop()
+        
+        # Save tracking state
+        if self.tracking_enabled and self.face_tracker:
+            self.logger.info("Guardando estado del tracker antes de salir...")
+            self.face_tracker.save_state()
         
         # Log final de estadísticas
         self._log_stats()
