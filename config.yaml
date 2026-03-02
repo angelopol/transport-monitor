@@ -37,7 +37,7 @@ detector:
   # Tamaño mínimo del rostro (ancho en píxeles) para ser considerado válido
   min_face_size: 50
   # Umbral de varianza Laplaciana para detectar desenfoque (mayor es más estricto, 0 deshabilita)
-  blur_threshold: 100.0
+  blur_threshold: 20.0
 
 # Configuración de almacenamiento local (SQLite)
 storage:
