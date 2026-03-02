@@ -225,7 +225,8 @@ class TransportMonitor:
             face_occluded_threshold=detector_config.get("face_occluded_threshold", 80),
             frontal_threshold=detector_config.get("frontal_threshold", 35),
             dry_run=detector_config.get("dry_run", False),
-            region=aws_config.get("region", "us-east-1")
+            region=aws_config.get("region", "us-east-1"),
+            engine=detector_config.get("engine", "local")
         )
         print("[5/8] FaceCounter OK")
         
@@ -864,7 +865,13 @@ Ejemplos:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Modo simulación: no hace llamadas a AWS Rekognition"
+        help="Modo simulación: no hace llamadas a AWS Rekognition para tracking ni detección"
+    )
+    
+    parser.add_argument(
+        "--aws-detection",
+        action="store_true",
+        help="Usar AWS Rekognition para la detección de rostros en lugar del modelo local (Mediapipe)"
     )
     
     parser.add_argument(
@@ -918,6 +925,13 @@ def main() -> int:
     
     if args.dry_run:
         config["detector"]["dry_run"] = True
+        
+    if getattr(args, "aws_detection", False):
+        config["detector"]["engine"] = "aws"
+    else:
+        # Default to local unless explicitly configured to aws
+        if config["detector"].get("engine") != "aws":
+            config["detector"]["engine"] = "local"
     
     if args.verbose:
         config["system"]["log_level"] = "DEBUG"

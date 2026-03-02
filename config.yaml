@@ -24,6 +24,8 @@ motion:
 
 # Configuración del detector de rostros
 detector:
+  # Motor de detección a utilizar: 'local' (Mediapipe) o 'aws' (Rekognition)
+  engine: "local"
   # Umbral mínimo de confianza para rostros (0-100)
   face_confidence_threshold: 90
   # Umbral de oclusión facial (0-100)
