@@ -151,10 +151,11 @@ class CloudSync:
         """
         try:
             payload = {"events": []}
-            if location and location.get("lat") is not None and location.get("lon") is not None:
+            normalized_location = self._normalize_location(location)
+            if normalized_location is not None:
                 payload["location"] = {
-                    "lat": location["lat"],
-                    "lon": location["lon"],
+                    "lat": normalized_location["lat"],
+                    "lon": normalized_location["lon"],
                 }
 
             response = requests.post(
@@ -174,6 +175,26 @@ class CloudSync:
         except requests.RequestException as e:
             self.logger.error(f"Network error during heartbeat: {e}")
             return False
+
+    def _normalize_location(self, location):
+        """Normalize location payloads coming from dicts or Location-like objects."""
+        if location is None:
+            return None
+
+        if isinstance(location, dict):
+            lat = location.get("lat", location.get("latitude"))
+            lon = location.get("lon", location.get("longitude"))
+        else:
+            lat = getattr(location, "lat", getattr(location, "latitude", None))
+            lon = getattr(location, "lon", getattr(location, "longitude", None))
+
+        if lat is None or lon is None:
+            return None
+
+        return {
+            "lat": lat,
+            "lon": lon,
+        }
 
     def get_excluded_faces(self) -> List[Dict]:
         """

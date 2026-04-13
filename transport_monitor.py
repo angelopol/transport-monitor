@@ -773,8 +773,16 @@ class TransportMonitor:
                         if self.location_provider:
                             try:
                                 loc = self.location_provider.get_location()
-                                if loc and loc.get("lat") is not None and loc.get("lon") is not None:
-                                    current_location = {"lat": loc["lat"], "lon": loc["lon"]}
+                                if hasattr(loc, "is_valid") and loc.is_valid():
+                                    current_location = {
+                                        "lat": loc.latitude,
+                                        "lon": loc.longitude,
+                                    }
+                                elif isinstance(loc, dict) and loc.get("lat") is not None and loc.get("lon") is not None:
+                                    current_location = {
+                                        "lat": loc["lat"],
+                                        "lon": loc["lon"],
+                                    }
                             except Exception as loc_err:
                                 self.logger.debug(f"No se pudo obtener GPS para heartbeat: {loc_err}")
                         self.cloud_sync.send_heartbeat(location=current_location)
