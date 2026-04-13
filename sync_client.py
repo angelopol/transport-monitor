@@ -138,15 +138,25 @@ class CloudSync:
             self.logger.error(f"Network error during sync: {e}")
             return 0
 
-    def send_heartbeat(self) -> bool:
+    def send_heartbeat(self, location: dict = None) -> bool:
         """
-        Send a heartbeat payload to the API to update device status.
-        
+        Send a heartbeat payload to the API to update device status and
+        optionally report the current GPS location.
+
+        Args:
+            location: Optional dict with 'lat' and 'lon' keys.
+
         Returns:
             True if heartbeat was successful
         """
         try:
             payload = {"events": []}
+            if location and location.get("lat") is not None and location.get("lon") is not None:
+                payload["location"] = {
+                    "lat": location["lat"],
+                    "lon": location["lon"],
+                }
+
             response = requests.post(
                 f"{self.api_url}/sync",
                 headers=self.headers,

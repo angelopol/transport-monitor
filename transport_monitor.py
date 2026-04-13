@@ -768,7 +768,16 @@ class TransportMonitor:
                 else:
                     if self.cloud_sync:
                         self.logger.debug("No hay eventos pendientes, enviando heartbeat...")
-                        self.cloud_sync.send_heartbeat()
+                        # Attach current GPS location if available
+                        current_location = None
+                        if self.location_provider:
+                            try:
+                                loc = self.location_provider.get_location()
+                                if loc and loc.get("lat") is not None and loc.get("lon") is not None:
+                                    current_location = {"lat": loc["lat"], "lon": loc["lon"]}
+                            except Exception as loc_err:
+                                self.logger.debug(f"No se pudo obtener GPS para heartbeat: {loc_err}")
+                        self.cloud_sync.send_heartbeat(location=current_location)
             
             except Exception as e:
                 self.logger.error(f"Error en bucle de sincronización: {e}")
