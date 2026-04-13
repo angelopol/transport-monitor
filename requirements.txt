@@ -7,3 +7,7 @@ stream-count-faces
 
 # Parsing de configuración YAML
 pyyaml>=6.0
+requests
+geocoder>=1.38.0
+getmac>=0.9.4
+pyserial>=3.5

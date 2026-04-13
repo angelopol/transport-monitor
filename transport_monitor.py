@@ -72,6 +72,11 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
         format=log_format,
         handlers=handlers
     )
+    
+    # Disable excessive external library debug logs
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('s3transfer').setLevel(logging.WARNING)
 
 
 def load_config(config_path: str) -> dict:
@@ -364,23 +369,35 @@ class TransportMonitor:
         self.logger.info(f"Señal recibida ({signum}), iniciando apagado...")
         self.running = False
     
-    def _create_face_event(self, face_count: int) -> dict:
+    def _create_face_event(self, face_count: int, location_data: dict = None) -> dict:
         """
         Crea un evento de detección de rostros.
         
         Args:
             face_count: Número de rostros detectados
+            location_data: Diccionario con latitud y longitud. Ej: {"lat": 10.0, "lon": -66.0}
             
         Returns:
             Diccionario con datos del evento
         """
+        if location_data is None:
+            location_data = {"lat": None, "lon": None}
+            
+        # Get Device ID
+        device_id = "transport_monitor_001"
+        try:
+            if hasattr(self, 'cloud_sync') and self.cloud_sync:
+                device_id = self.cloud_sync.device_mac
+        except:
+            pass
+            
         return {
             "count": face_count,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "device_id": "transport_monitor_001",  # TODO: Hacer configurable
+            "device_id": device_id,
             "location": {
-                "lat": None,  # TODO: Integrar GPS
-                "lon": None,
+                "lat": location_data.get("lat"),
+                "lon": location_data.get("lon"),
                 "route": "default_route"  # TODO: Hacer configurable
             }
         }
@@ -567,8 +584,12 @@ class TransportMonitor:
                 self.logger.info(f"Nuevos pasajeros: {len(new_passengers)} (de {face_count} rostros)")
                 
                 # 5. Registrar eventos de abordaje con geolocalización
+                location_data = {"lat": None, "lon": None}
                 if self.location_enabled and hasattr(self, 'passenger_store'):
                     location = self.location_provider.get_location()
+                    if location:
+                        location_data = {"lat": location.latitude, "lon": location.longitude}
+                        
                     for face in new_passengers:
                         # Get face_id if available from tracking
                         passenger_face_id = None
@@ -581,14 +602,14 @@ class TransportMonitor:
                         
                         self.passenger_store.record_boarding(
                             face_id=passenger_face_id,
-                            latitude=location.latitude,
-                            longitude=location.longitude,
-                            location_source=location.source,
-                            location_accuracy=location.accuracy
+                            latitude=location.latitude if location else None,
+                            longitude=location.longitude if location else None,
+                            location_source=location.source if location else "none",
+                            location_accuracy=location.accuracy if location else None
                         )
                 
                 # 6. Guardar evento solo para nuevos pasajeros
-                event_data = self._create_face_event(len(new_passengers))
+                event_data = self._create_face_event(len(new_passengers), location_data)
                 event_id = self.local_buffer.save_event("face_count", event_data)
                 self.stats["events_saved"] += 1
                 
