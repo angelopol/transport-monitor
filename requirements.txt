@@ -3,11 +3,11 @@
 
 # Paquete de conteo de rostros (instalar desde stream-faces-counter)
 # pip install -e ../stream-faces-counter
-stream-count-faces
+# stream-count-faces
 
 # Parsing de configuración YAML
 pyyaml>=6.0
 requests
 geocoder>=1.38.0
 getmac>=0.9.4
-pyserial>=3.5
+pyserial>=3.5
