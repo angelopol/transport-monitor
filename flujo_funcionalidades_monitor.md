@@ -14,19 +14,19 @@ El ciclo inicia al prenderse la placa de hardware empotrada en la buseta, activ�
 2. **Setup de Logs:** Instancia y rotula el registro de actividades locales (`setup_logging()`) dejando trazas explícitas e imprimibles bajo el directorio `logs/` para auditorias técnicas o fallos lógicos abordo.
 3. **Instanciación de Módulos Core (`_init_components`):** Se instancian en RAM todas las sub-librerías (Cámara asíncrona, Detector de movimiento perimetral, Reconocimiento AWS, SQLite Local y Geolocalizador).
 
-## 2. Inyección Biométrica de Nube (SyncClient - Pre-Ruta)
-Antes de siquiera grabar el primer rostro, `transport-monitor` debe resolver quién está manejando hoy:
-* El módulo nativo `CloudSync` realiza una consulta segura al backend ('transport-admin') informando la Identidad (Token MAC) de esta unidad física.
-* El servidor responde descargándole silenciosamente al script (`_sync_excluded_faces()`) las identidades y rostros registrados de los **Dueños, Conductores y Colectores** que la base de datos de la empresa tiene como habilitados.
-* Estos rostros descargados alimentan al `FaceTracker` para blindar al sistema de no contabilizar falsamente al propio conductor mientras conduce la unidad.
+## 2. Autenticación y Sincronización Biométrica (SyncClient)
+Antes de iniciar la captura, el dispositivo debe ser validado por el servidor:
+1. **Autenticación Obligatoria:** El monitor intenta autenticarse usando su MAC Address. Si el dispositivo no está vinculado a un autobús activo en `transport-admin`, el script entra en un bucle de espera (Retry cada 30s) hasta que el administrador complete el emparejamiento.
+2. **Descarga de Rostros Excluidos:** Una vez autenticado, descarga las fotos de **Conductores y Colectores** asignados a la empresa (`_sync_excluded_faces()`).
+3. **Persistencia de Exclusión:** Estos rostros alimentan al `FaceTracker`, permitiendo que el personal autorizado se mueva por la cabina sin generar falsos positivos en el conteo de pasajeros.
 
 ## 3. El Bucle de Supervivencia (Event Loop de Monitoreo)
 El orquestador invoca la función `run()`, iniciando el ciclo perpetuo infinito del viaje:
 1. **Captura Visual Asíncrona:** Lee pasivamente un fotograma de RAM (gracias al sub-proceso de `VideoStream`).
-2. **Descarte por Movimiento:** Interroga al `MotionDetector` para evitar disparar lógicas en una unidad estacionaria o vacía.
-3. **Inferencia Local:** Extrae las siluetas de cabezas si detectó el paso de peatones mediante su detector local para ahorrar peticiones a la nube.
-4. **Telemetría e Inferencia AWS (La decantación):** Se somete el rostro o frames seleccionados a la validación estricta de `FaceCounter` y se compara a la bio-restricción de `FaceTracker` evitando que el conductor genere +1 en los indicadores económicos.
-5. **Generador del Payload:** Al declararse contundentemente cómo un **"Pasajero Nuevo"**, el `transport-monitor` empaqueta una entidad relacional construyendo un JSON con la hora exacta y las geo-coordenadas brindadas por su antena.
+2. **Descarte por Movimiento:** Interroga al `MotionDetector` para evitar procesar frames innecesarios en unidades estacionarias.
+3. **Validación de Calidad Facial:** Al detectar un rostro, se evalúan umbrales de **Nitidez (Sharpness)** y **Tamaño Mínimo** para descartar detecciones accidentales o borrosas por vibración.
+4. **Telemetría e Inferencia AWS:** Se somete el frame a la validación de `FaceCounter` y se compara con la base de datos de exclusión.
+5. **Generador del Payload:** Si es un "Pasajero Nuevo", se crea un JSON con el `event_timestamp`, el conteo y las geo-coordenadas (GPS o Fallback por IP).
 
 ## 4. Persistencia Subterránea
 Todas las validaciones en carretera son propensas a pérdida de señal. Para resolver esto:
@@ -36,7 +36,8 @@ Todas las validaciones en carretera son propensas a pérdida de señal. Para res
 De forma paralela (y controlada por un Thread de Python `_sync_loop()`), el sistema revisa a un ritmo distinto todo lo que se ha ido guardando estáticamente en la cabina.
 1. Examina la calidad de la conexión con el servidor maestro.
 2. Sí existe cobertura celular o WiFi, empaqueta los eventos `'Pendiente'` desde la base de datos local y los inyecta al endpoint de la API `/telemetry`.
-3. Al recibir un acuse de recibo positivo `(HTTP 200 OK)`, limpia su propia base de datos, garantizando que el dueño visualice al instante la métrica en su "Portal Admin" sin gastar memoria o red repetida de la placa.
+3. Al recibir un acuse de recibo positivo `(HTTP 200 OK)`, limpia su propia base de datos.
+4. **Heartbeat Proactivo:** Si no hay eventos que sincronizar, el hilo envía un "Latido" periódico al servidor incluyendo la ubicación GPS actual para el rastreo en tiempo real del bus en el mapa administrativo.
 
 ## 6. Hibernación Segura y Salida
 El orquestador está diseñado para resistir re-arranques u órdenes directas del Kernel de Linux.
