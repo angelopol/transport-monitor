@@ -43,7 +43,8 @@ from stream_count_faces import (
     LocationProvider,
     PassengerEventStore,
     extract_face_image,
-    get_device_mac
+    get_device_mac,
+    now_local,
 )
 
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
@@ -270,6 +271,7 @@ class TransportMonitor:
         
         # LocationProvider y PassengerEventStore (geolocalización)
         if self.location_enabled:
+            print("[7.2/8] Inicializando LocationProvider...")
             self.location_provider = LocationProvider(
                 serial_port=gps_serial_port,
                 use_ip_fallback=self.ip_fallback_enabled
@@ -277,10 +279,19 @@ class TransportMonitor:
             self.passenger_store = PassengerEventStore(
                 db_path=storage_config.get("passenger_events_path", "data/passenger_events.db")
             )
+            loc_stats = self.location_provider.get_stats()
+            active_sources = [
+                src for src, available in [
+                    ("windows", loc_stats.get("windows_location_available", False)),
+                    ("gpsd",    loc_stats.get("gpsd_available", False)),
+                    ("serial",  loc_stats.get("serial_available", False)),
+                    ("ip",      loc_stats.get("ip_fallback_enabled", False)),
+                ] if available
+            ]
             self.logger.info(
-                f"Geolocalización habilitada: GPS={gps_serial_port or 'auto'}, "
-                f"IP fallback={'sí' if self.ip_fallback_enabled else 'no'}"
+                f"Geolocalización habilitada — fuentes activas: {active_sources or ['ninguna']}"
             )
+            print(f"[7.2/8] LocationProvider OK — fuentes: {active_sources or ['ninguna']}")
         else:
             self.location_provider = None
             self.passenger_store = None
@@ -393,7 +404,7 @@ class TransportMonitor:
             
         return {
             "count": face_count,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": now_local().isoformat(),
             "device_id": device_id,
             "location": {
                 "lat": location_data.get("lat"),
@@ -535,9 +546,9 @@ class TransportMonitor:
                                 self.stats["excluded_detected"] += 1
                                 self.logger.debug("Personal autorizado detectado, ignorando")
                             elif is_new:
-                                new_passengers.append(face)
+                                new_passengers.append((face, face_id))
                                 self.stats["new_passengers"] += 1
-                                
+
                                 # DEBUG: Save face image for inspection
                                 if self.logger.isEnabledFor(logging.DEBUG):
                                     try:
@@ -555,11 +566,10 @@ class TransportMonitor:
                                 self.logger.debug(f"Pasajero duplicado detectado: {face_id}")
                         except Exception as e:
                             self.logger.warning(f"Error procesando rostro para tracking: {e}")
-                            # Si hay error, considerar como nuevo pasajero
-                            new_passengers.append(face)
+                            new_passengers.append((face, None))
                 else:
                     # Sin tracking, todos los rostros son nuevos pasajeros
-                    new_passengers = faces
+                    new_passengers = [(f, None) for f in faces]
                     self.stats["new_passengers"] += len(faces)
                     
                     # DEBUG: Save all faces when tracking is disabled
@@ -587,25 +597,22 @@ class TransportMonitor:
                 location_data = {"lat": None, "lon": None}
                 if self.location_enabled and hasattr(self, 'passenger_store'):
                     location = self.location_provider.get_location()
-                    if location:
+                    if location.is_valid():
                         location_data = {"lat": location.latitude, "lon": location.longitude}
-                        
-                    for face in new_passengers:
-                        # Get face_id if available from tracking
-                        passenger_face_id = None
-                        if self.tracking_enabled and self.face_tracker:
-                            try:
-                                face_img = extract_face_image(frame, face.bounding_box)
-                                _, passenger_face_id, _ = self.face_tracker.is_new_passenger(face_img)
-                            except:
-                                pass
-                        
+                        self.logger.debug(
+                            f"Ubicación: {location.latitude:.6f}, {location.longitude:.6f} "
+                            f"(source={location.source}, accuracy={location.accuracy}m)"
+                        )
+                    else:
+                        self.logger.debug(f"Ubicación no disponible (source={location.source})")
+
+                    for _, passenger_face_id in new_passengers:
                         self.passenger_store.record_boarding(
                             face_id=passenger_face_id,
-                            latitude=location.latitude if location else None,
-                            longitude=location.longitude if location else None,
-                            location_source=location.source if location else "none",
-                            location_accuracy=location.accuracy if location else None
+                            latitude=location.latitude,
+                            longitude=location.longitude,
+                            location_source=location.source,
+                            location_accuracy=location.accuracy
                         )
                 
                 # 6. Guardar evento solo para nuevos pasajeros

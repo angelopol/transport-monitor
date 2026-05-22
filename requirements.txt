@@ -11,3 +11,6 @@ requests
 geocoder>=1.38.0
 getmac>=0.9.4
 pyserial>=3.5
+opencv-python
+# Windows Location API via PowerShell subprocess (no compilation required)
+# No extra package needed — uses built-in subprocess + PowerShell WinRT bridge
