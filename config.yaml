@@ -6,8 +6,8 @@ camera:
   # Fuente de video: índice de cámara (0, 1, ...) o URL RTSP
   source: 0
   # Resolución objetivo
-  width: 1280
-  height: 720
+  width: 1920
+  height: 1080
   # FPS objetivo para procesamiento (no afecta captura)
   target_fps: 5
 

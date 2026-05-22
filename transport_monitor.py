@@ -204,6 +204,38 @@ class TransportMonitor:
         self.location_enabled = os.getenv("ENABLE_LOCATION_TRACKING", "true").lower() == "true"
         self.ip_fallback_enabled = os.getenv("ENABLE_IP_FALLBACK", "true").lower() == "true"
         gps_serial_port = os.getenv("GPS_SERIAL_PORT", None)
+
+        # Face detection thresholds — env vars override config.yaml values
+        if os.getenv("FACE_MIN_SIZE"):
+            detector_config["min_face_size"] = int(os.getenv("FACE_MIN_SIZE"))
+        if os.getenv("FACE_BLUR_THRESHOLD"):
+            detector_config["blur_threshold"] = float(os.getenv("FACE_BLUR_THRESHOLD"))
+        if os.getenv("FACE_CONFIDENCE_THRESHOLD"):
+            detector_config["face_confidence_threshold"] = float(os.getenv("FACE_CONFIDENCE_THRESHOLD"))
+        if os.getenv("FACE_OCCLUDED_THRESHOLD"):
+            detector_config["face_occluded_threshold"] = float(os.getenv("FACE_OCCLUDED_THRESHOLD"))
+        if os.getenv("FACE_FRONTAL_THRESHOLD"):
+            detector_config["frontal_threshold"] = float(os.getenv("FACE_FRONTAL_THRESHOLD"))
+
+        # Tracking — env vars override config.yaml values
+        if os.getenv("TRACKING_ENABLED"):
+            tracking_config["enabled"] = os.getenv("TRACKING_ENABLED").lower() == "true"
+        if os.getenv("TRACKING_TTL_MINUTES"):
+            tracking_config["ttl_minutes"] = int(os.getenv("TRACKING_TTL_MINUTES"))
+        if os.getenv("TRACKING_SIMILARITY_THRESHOLD"):
+            tracking_config["similarity_threshold"] = float(os.getenv("TRACKING_SIMILARITY_THRESHOLD"))
+        if os.getenv("TRACKING_MAX_FACES"):
+            tracking_config["max_tracked_faces"] = int(os.getenv("TRACKING_MAX_FACES"))
+
+        # Motion detection — env vars override config.yaml values
+        if os.getenv("MOTION_MIN_AREA"):
+            motion_config["min_area"] = int(os.getenv("MOTION_MIN_AREA"))
+        if os.getenv("MOTION_THRESHOLD"):
+            motion_config["threshold"] = int(os.getenv("MOTION_THRESHOLD"))
+        if os.getenv("MOTION_BLUR_KERNEL"):
+            motion_config["blur_kernel"] = int(os.getenv("MOTION_BLUR_KERNEL"))
+        if os.getenv("MOTION_COOLDOWN_FRAMES"):
+            motion_config["cooldown_frames"] = int(os.getenv("MOTION_COOLDOWN_FRAMES"))
         
         # VideoStream
         print(f"[3/8] Inicializando VideoStream (source={cam_config.get('source', 0)})...")
@@ -267,6 +299,28 @@ class TransportMonitor:
         else:
             self.face_tracker = None
             self.logger.info("Tracking de pasajeros deshabilitado")
+
+        # Verificar credenciales AWS antes de entrar al bucle principal.
+        # boto3.client() es lazy — nunca prueba credenciales en el constructor,
+        # por eso el error solo aparecería en el primer compare_faces si no lo chequeamos aquí.
+        if self.tracking_enabled and self.face_tracker:
+            dry_run = detector_config.get("dry_run", False)
+            if not dry_run:
+                print("[7.1/8] Verificando credenciales AWS Rekognition...")
+                try:
+                    self.face_tracker.verify_aws_credentials()
+                    print("[7.1/8] Credenciales AWS OK")
+                except RuntimeError as e:
+                    print(f"\n[ERROR] {e}")
+                    print(
+                        "\nOpciones:\n"
+                        "  1. Configura AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY en el .env\n"
+                        "  2. Usa DRY_RUN=true en el .env para ejecutar sin AWS"
+                    )
+                    raise SystemExit(1)
+            else:
+                print("[7.1/8] DRY_RUN activo — verificación AWS omitida")
+
         print("[7/8] FaceTracker OK")
         
         # LocationProvider y PassengerEventStore (geolocalización)
