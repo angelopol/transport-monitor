@@ -205,6 +205,10 @@ class TransportMonitor:
         self.ip_fallback_enabled = os.getenv("ENABLE_IP_FALLBACK", "true").lower() == "true"
         gps_serial_port = os.getenv("GPS_SERIAL_PORT", None)
 
+        # Face detection engine — env var overrides config.yaml
+        if os.getenv("FACE_DETECTION_ENGINE"):
+            detector_config["engine"] = os.getenv("FACE_DETECTION_ENGINE").lower()
+
         # Face detection thresholds — env vars override config.yaml values
         if os.getenv("FACE_MIN_SIZE"):
             detector_config["min_face_size"] = int(os.getenv("FACE_MIN_SIZE"))
@@ -640,16 +644,10 @@ class TransportMonitor:
                             except Exception as e:
                                 self.logger.warning(f"Failed to save debug face: {e}")
                 
-                if len(new_passengers) == 0:
-                    self.logger.debug("Sin nuevos pasajeros en este frame")
-                    time.sleep(loop_delay)
-                    continue
-                
-                self.logger.info(f"Nuevos pasajeros: {len(new_passengers)} (de {face_count} rostros)")
-                
-                # 5. Registrar eventos de abordaje con geolocalización
+                # 5. Obtener ubicación GPS desde caché (no bloquea — hilo de fondo la actualiza)
                 location_data = {"lat": None, "lon": None}
-                if self.location_enabled and hasattr(self, 'passenger_store'):
+                location = None
+                if self.location_enabled and self.location_provider:
                     location = self.location_provider.get_location()
                     if location.is_valid():
                         location_data = {"lat": location.latitude, "lon": location.longitude}
@@ -658,8 +656,17 @@ class TransportMonitor:
                             f"(source={location.source}, accuracy={location.accuracy}m)"
                         )
                     else:
-                        self.logger.debug(f"Ubicación no disponible (source={location.source})")
+                        self.logger.debug(f"Ubicación no disponible aún (source={location.source})")
 
+                if len(new_passengers) == 0:
+                    self.logger.debug("Sin nuevos pasajeros en este frame")
+                    time.sleep(loop_delay)
+                    continue
+
+                self.logger.info(f"Nuevos pasajeros: {len(new_passengers)} (de {face_count} rostros)")
+
+                # Registrar abordaje con geolocalización en PassengerEventStore
+                if self.location_enabled and hasattr(self, 'passenger_store') and location:
                     for _, passenger_face_id in new_passengers:
                         self.passenger_store.record_boarding(
                             face_id=passenger_face_id,
@@ -784,6 +791,14 @@ class TransportMonitor:
 
     def _sync_loop(self):
         """Background loop for syncing events."""
+        # Antigüedad máxima de eventos a sincronizar (configurable via .env)
+        max_event_age_hours = int(os.getenv("SYNC_MAX_EVENT_AGE_HOURS", "24"))
+
+        # Limpiar backlog acumulado antes de sincronizar
+        purged = self.local_buffer.purge_old_pending(max_age_hours=max_event_age_hours)
+        if purged:
+            print(f"[SYNC] {purged} eventos con antigüedad > {max_event_age_hours}h eliminados del buffer local")
+
         # Initial sync of excluded faces
         if self.tracking_enabled:
              self._sync_excluded_faces()
@@ -791,11 +806,13 @@ class TransportMonitor:
 
         while not self.stop_sync.is_set():
             try:
-                # 1. Get pending events from local buffer
+                # 1. Get pending events from local buffer (solo los recientes)
                 if hasattr(self.local_buffer, 'get_pending_events'):
-                    pending_events = self.local_buffer.get_pending_events(limit=50)
+                    pending_events = self.local_buffer.get_pending_events(
+                        limit=50,
+                        max_age_hours=max_event_age_hours,
+                    )
                 else:
-                    # Fallback if method doesn't exist yet in LocalBuffer
                     pending_events = []
                 
                 if pending_events:
@@ -886,7 +903,11 @@ class TransportMonitor:
         
         # Detener stream de video
         self.video_stream.stop()
-        
+
+        # Detener hilo de polling GPS
+        if self.location_provider is not None:
+            self.location_provider.close()
+
         # Save tracking state
         if self.tracking_enabled and self.face_tracker:
             self.logger.info("Guardando estado del tracker antes de salir...")
@@ -1027,8 +1048,8 @@ def main() -> int:
         
     if getattr(args, "aws_detection", False):
         config["detector"]["engine"] = "aws"
-    else:
-        # Default to local unless explicitly configured to aws
+    elif not os.getenv("FACE_DETECTION_ENGINE"):
+        # Default to local unless config.yaml or env var already set aws
         if config["detector"].get("engine") != "aws":
             config["detector"]["engine"] = "local"
     
